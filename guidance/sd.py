@@ -65,7 +65,26 @@ class StableDiffusion(nn.Module):
     ):
         
         # TODO: Implement the loss function for SDS
-        raise NotImplementedError("SDS is not implemented yet.")
+        # raise NotImplementedError("SDS is not implemented yet.")
+        # uncond embeddings first then cond embeddings, all have been passed in text_embeddings
+        noise = torch.randn_like(latents, device=self.device, dtype=self.dtype)
+        t = torch.randint(
+            self.min_step, self.max_step, (latents.shape[0],), 
+            device=self.device, dtype=torch.long,
+        )
+        # add noise to latents
+        latents_noisy = self.scheduler.add_noise(latents, noise, t)
+        # get noise predictions
+        noise_pred = self.get_noise_preds(
+            latents_noisy, t, text_embeddings, guidance_scale=guidance_scale,
+        )
+        # Compute the loss
+        loss = nn.functional.mse_loss(
+            noise_pred.float(), noise.float(), reduction='mean',
+        ) * grad_scale
+        return loss
+
+
     
     
     def get_pds_loss(

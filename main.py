@@ -75,7 +75,7 @@ def run(args):
         latents = src_latents.clone().detach().requires_grad_(True)
         
     else:
-        # Initialize latents with random Gaussian for generation
+        # Initialize latents with random Gaussian for generation -> sds case
         latents = nn.Parameter(
             torch.randn(
                 1, 4, 64, 64, 
