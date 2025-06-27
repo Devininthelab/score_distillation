@@ -67,21 +67,41 @@ class StableDiffusion(nn.Module):
         # TODO: Implement the loss function for SDS
         # raise NotImplementedError("SDS is not implemented yet.")
         # uncond embeddings first then cond embeddings, all have been passed in text_embeddings
+        # noise = torch.randn_like(latents, device=self.device, dtype=self.dtype)
+        # t = torch.randint(
+        #     self.min_step, self.max_step, (latents.shape[0],), 
+        #     device=self.device, dtype=torch.long,
+        # )
+        # # add noise to latents
+        # latents_noisy = self.alphas[t] ** 0.5 * latents + (1.0 - self.alphas[t]) ** 0.5 * noise
+        # # get noise predictions
+        # noise_pred = self.get_noise_preds(
+        #     latents_noisy, t, text_embeddings, guidance_scale=guidance_scale,
+        # )
+
+        # sqrt_alpha_t = self.alphas[t].sqrt().view(-1, 1, 1, 1)
+        # # Compute the loss
+        # loss = nn.functional.mse_loss(
+        #     sqrt_alpha_t * noise_pred.float(),                          # predicted component
+        #     latents_noisy.float() - sqrt_alpha_t * latents.float(),     # target component
+        #     reduction='mean'
+        # ) * grad_scale
+
+        # version 2:
         noise = torch.randn_like(latents, device=self.device, dtype=self.dtype)
         t = torch.randint(
             self.min_step, self.max_step, (latents.shape[0],), 
             device=self.device, dtype=torch.long,
         )
-        # add noise to latents
         latents_noisy = self.scheduler.add_noise(latents, noise, t)
-        # get noise predictions
-        noise_pred = self.get_noise_preds(
-            latents_noisy, t, text_embeddings, guidance_scale=guidance_scale,
-        )
-        # Compute the loss
-        loss = nn.functional.mse_loss(
-            noise_pred.float(), noise.float(), reduction='mean',
-        ) * grad_scale
+        
+
+        noise_pred = self.get_noise_preds(latents_noisy, t, text_embeddings, guidance_scale=guidance_scale)
+        w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+        grad = w * (noise_pred - noise)
+        target = (latents - grad).detach()
+        loss = 0.5 * nn.functional.mse_loss(latents, target, reduction="mean")
+
         return loss
 
 
@@ -96,6 +116,8 @@ class StableDiffusion(nn.Module):
         
         # TODO: Implement the loss function for PDS
         raise NotImplementedError("PDS is not implemented yet.")
+        
+
     
     
     @torch.no_grad()
