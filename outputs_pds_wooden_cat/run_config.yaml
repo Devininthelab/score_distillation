@@ -1,0 +1,14 @@
+{
+    "prompt": "a cat sitting on a table",
+    "negative_prompt": "low quality",
+    "edit_prompt": "a wooden cat statue sitting on a table",
+    "src_img_path": "/home/minhthan001/Projects/score_distillation/data/imgs/a_cat_sitting_on_a_table.png",
+    "save_dir": "./outputs",
+    "loss_type": "pds",
+    "guidance_scale": 7.5,
+    "step": 500,
+    "device": 0,
+    "lr": 0.001,
+    "log_step": 25,
+    "precision": "fp32"
+}

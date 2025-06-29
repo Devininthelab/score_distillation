@@ -1,0 +1,14 @@
+{
+    "prompt": "Kyrie Irving",
+    "negative_prompt": "low quality",
+    "edit_prompt": null,
+    "src_img_path": null,
+    "save_dir": "./outputs",
+    "loss_type": "sds",
+    "guidance_scale": 25.0,
+    "step": 500,
+    "device": 0,
+    "lr": 0.001,
+    "log_step": 25,
+    "precision": "fp32"
+}

@@ -2,6 +2,7 @@ from diffusers import DDIMScheduler, StableDiffusionPipeline
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class StableDiffusion(nn.Module):
@@ -35,6 +36,8 @@ class StableDiffusion(nn.Module):
         self.alphas = self.scheduler.alphas_cumprod.to(self.device) # for convenience
 
         print(f'[INFO] loaded stable diffusion!')
+        print(f'[INFO] min_step: {self.min_step}, max_step: {self.max_step}')
+        print(f"[INFO] device: {self.device}, dtype: {self.dtype}")
 
     @torch.no_grad()
     def get_text_embeds(self, prompt):
@@ -73,21 +76,18 @@ class StableDiffusion(nn.Module):
         #     device=self.device, dtype=torch.long,
         # )
         # # add noise to latents
-        # latents_noisy = self.alphas[t] ** 0.5 * latents + (1.0 - self.alphas[t]) ** 0.5 * noise
+        # latents_noisy = self.scheduler.add_noise(latents, noise, t)
         # # get noise predictions
         # noise_pred = self.get_noise_preds(
         #     latents_noisy, t, text_embeddings, guidance_scale=guidance_scale,
         # )
-
-        # sqrt_alpha_t = self.alphas[t].sqrt().view(-1, 1, 1, 1)
+        # w = (1- self.alphas[t]).view(-1, 1, 1, 1)
         # # Compute the loss
-        # loss = nn.functional.mse_loss(
-        #     sqrt_alpha_t * noise_pred.float(),                          # predicted component
-        #     latents_noisy.float() - sqrt_alpha_t * latents.float(),     # target component
-        #     reduction='mean'
-        # ) * grad_scale
+        # loss = w * (noise_pred - noise) * grad_scale 
+        # loss = loss.mean()
+        # return loss
 
-        # version 2:
+        # version 2: works
         noise = torch.randn_like(latents, device=self.device, dtype=self.dtype)
         t = torch.randint(
             self.min_step, self.max_step, (latents.shape[0],), 
@@ -97,16 +97,47 @@ class StableDiffusion(nn.Module):
         
 
         noise_pred = self.get_noise_preds(latents_noisy, t, text_embeddings, guidance_scale=guidance_scale)
-        w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
-        grad = w * (noise_pred - noise)
+        w = (1 - self.alphas[t]).view(-1, 1, 1, 1)  # [B, 1, 1, 1], for broadcasting easier, 
+        grad =  w * (noise_pred - noise) # even if I drop the w term still can sample
         target = (latents - grad).detach()
         loss = 0.5 * nn.functional.mse_loss(latents, target, reduction="mean")
+        # print(loss) # a tensor with scalar value
+
+
+        # version 3: wrong, leavae it here for reference
+        # noise = torch.randn_like(latents, device=self.device, dtype=self.dtype)
+        # t = torch.randint(
+        #     self.min_step, self.max_step, (latents.shape[0],), 
+        #     device=self.device, dtype=torch.long,
+        # )
+        # latents_noisy = self.scheduler.add_noise(latents, noise, t)
+        # noise_pred = self.get_noise_preds(latents_noisy, t, text_embeddings, guidance_scale=guidance_scale)
+        # sqrt_alpha_t = self.alphas[t].sqrt().view(-1, 1, 1, 1)
+        # loss = nn.functional.mse_loss(noise_pred - noise, torch.zeros_like(noise_pred, device=self.device, dtype=self.dtype),
+        #     reduction='mean'
+        # ) * grad_scale * 0.5
 
         return loss
 
+    def compute_posterior_mean(self, xt, noise_pred, t, t_prev):
+        """
+        Computes an estimated posterior mean \mu_\phi(x_t, y; \epsilon_\phi).
+        """
+        device = self.device
+        beta_t = self.scheduler.betas[t.cpu()].to(device)
+        alpha_t = self.scheduler.alphas[t.cpu()].to(device)
+        alpha_bar_t = self.scheduler.alphas_cumprod[t.cpu()].to(device)
+        alpha_bar_t_prev = self.scheduler.alphas_cumprod[t_prev.cpu()].to(device)
 
-    
-    
+        pred_x0 = (xt - torch.sqrt(1 - alpha_bar_t) * noise_pred) / torch.sqrt(
+            alpha_bar_t
+        )
+        c0 = torch.sqrt(alpha_bar_t_prev) * beta_t / (1 - alpha_bar_t)
+        c1 = torch.sqrt(alpha_t) * (1 - alpha_bar_t_prev) / (1 - alpha_bar_t)
+
+        mean_func = c0 * pred_x0 + c1 * xt
+        return mean_func
+
     def get_pds_loss(
         self, src_latents, tgt_latents, 
         src_text_embedding, tgt_text_embedding,
@@ -115,8 +146,50 @@ class StableDiffusion(nn.Module):
     ):
         
         # TODO: Implement the loss function for PDS
-        raise NotImplementedError("PDS is not implemented yet.")
+        # raise NotImplementedError("PDS is not implemented yet.")
+        # set up time dependent variables
+        device = self.device
+        t = torch.randint(
+            self.min_step, self.max_step, (src_latents.shape[0],), 
+            device=self.device, dtype=torch.long,
+        )
         
+        t_prev = t - 1
+        
+        beta_t = self.scheduler.betas[t.cpu()].to(self.device)
+        alpha_bar_t = self.scheduler.alphas_cumprod[t.cpu()].to(self.device)
+        alpha_bar_t_prev = self.scheduler.alphas_cumprod[t_prev.cpu()].to(self.device)
+        sigma_t = ((1 - alpha_bar_t_prev) / (1 - alpha_bar_t) * beta_t) ** (0.5)
+
+        noise_t = torch.randn_like(src_latents, device=self.device, dtype=self.dtype)
+        # Use the same noise for both source and target at time t_prev  
+        noise_t_prev = torch.randn_like(src_latents, device=self.device, dtype=self.dtype)
+
+        src_latents_noisy = self.scheduler.add_noise(src_latents, noise_t, t)
+        tgt_latents_noisy = self.scheduler.add_noise(tgt_latents, noise_t, t)
+
+        src_latents_prev = self.scheduler.add_noise(src_latents, noise_t_prev, t_prev)
+        tgt_latents_prev = self.scheduler.add_noise(tgt_latents, noise_t_prev, t_prev)
+
+        noise_pred_src = self.get_noise_preds(src_latents_noisy, t, src_text_embedding, guidance_scale=guidance_scale)
+        noise_pred_tgt = self.get_noise_preds(tgt_latents_noisy, t, tgt_text_embedding, guidance_scale=guidance_scale)
+
+    
+        # compute posterior mean
+        src_mu = self.compute_posterior_mean(src_latents_noisy, noise_pred_src, t, t_prev)
+        tgt_mu = self.compute_posterior_mean(tgt_latents_noisy, noise_pred_tgt, t, t_prev)
+
+        zt_src = (src_latents_prev - src_mu) / sigma_t
+        zt_tgt = (tgt_latents_prev - tgt_mu) / sigma_t
+
+        grad = (zt_tgt- zt_src) * grad_scale
+        grad = torch.nan_to_num(grad)
+
+        target = (tgt_latents - grad).detach()
+        loss = 0.5 * F.mse_loss(tgt_latents, target, reduction="mean")
+
+        return loss
+
 
     
     
