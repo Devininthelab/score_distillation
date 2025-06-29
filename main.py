@@ -74,7 +74,7 @@ def run(args):
         # Initialize latents with source images
         latents = src_latents.clone().detach().requires_grad_(True)
         
-    else:
+    elif args.loss_type in ["sds"]:
         # Initialize latents with random Gaussian for generation -> sds case
         latents = nn.Parameter(
             torch.randn(
@@ -83,6 +83,27 @@ def run(args):
                 dtype=args.precision,
             )
         )
+
+    elif args.loss_type in ["dds"]:
+        src_img = Image.open(args.src_img_path).convert("RGB")
+        src_img.save(os.path.join(args.save_dir, "src_img.png"))
+
+        torch_src_img = pil_to_torch(src_img).to(device)
+        src_h, src_w = torch_src_img.shape[-2], torch_src_img.shape[-1]
+
+        # resize such that the shortest side is 512
+        l = min(src_h, src_w)
+        new_h, new_w = int(512 / l * src_h), int(512 / l * src_w)
+        src_img_tensor = F.interpolate(torch_src_img, (new_h, new_w), mode="bilinear")
+        print("Source image shape:", src_img_tensor.shape)
+        src_latents = model.encode_imgs(src_img_tensor)
+
+        tgt_embeddings = model.get_text_embeds(args.edit_prompt)
+        edit_embeddings = torch.cat([uncond_embeddings, tgt_embeddings])
+
+        latents = src_latents.clone().detach().requires_grad_(True) # Target latents for dds
+    else:
+        raise ValueError("Invalid loss type")
     
     optimizer = torch.optim.AdamW([latents], lr=1e-1, weight_decay=0)
     scheduler = get_cosine_schedule_with_warmup(optimizer, 100, int(steps*1.5))
@@ -105,6 +126,13 @@ def run(args):
                 guidance_scale=guidance_scale, 
             )
             
+        elif args.loss_type == "dds":
+            loss = model.get_dds_loss(
+                src_latents=src_latents, tgt_latents=latents, 
+                src_text_embedding=text_embeddings, tgt_text_embedding=edit_embeddings,
+                guidance_scale=guidance_scale, 
+            )
+
         else:
             raise ValueError("Invalid loss type")
         
@@ -123,7 +151,9 @@ def run(args):
     img = model.decode_latents(latents)
     if args.loss_type == "sds":
         prompt_key = args.prompt.replace(" ", "_")
-    else:
+    elif args.loss_type == "pds":
+        prompt_key = args.edit_prompt.replace(" ", "_")
+    elif args.loss_type == "dds":
         prompt_key = args.edit_prompt.replace(" ", "_")
     img_save_path = os.path.join(args.save_dir, f"{prompt_key}.png")
     torch_to_pil(img).save(img_save_path)
@@ -153,8 +183,8 @@ def parse_args():
     
 def main():
     args = parse_args()
-    assert args.loss_type in ["sds", "pds"], "Invalid loss type"
-    if args.loss_type in ["pds"]:
+    assert args.loss_type in ["sds", "pds", "dds"], "Invalid loss type"
+    if args.loss_type in ["pds", "dds"]:
         assert args.edit_prompt is not None, f"edit_prompt is required for {args.loss_type}"
         assert args.src_img_path is not None, f"src_img_path is required for {args.loss_type}"
     
@@ -174,3 +204,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # For runnning pds: 
+    # python main.py --prompt "a cat sitting on a table" --loss_type pds --guidance_scale 7.5 --edit_prompt "a wooden cat statue sitting on a table" --src_img_path data/imgs/a_cat_sitting_on_a_table.png
+
+    # For running sds:
+    # python main.py --prompt "kyrie irving" --loss_type sds --guidance_scale 25
+
+    # For running dds:
+    # python main.py --prompt "a cat sitting on a table" --loss_type dds --guidance_scale 25 --edit_prompt "a wooden cat statue sitting on a table" --src_img_path data/imgs/a_cat_sitting_on_a_table.png

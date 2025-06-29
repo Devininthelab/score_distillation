@@ -59,13 +59,7 @@ class StableDiffusion(nn.Module):
         return noise_pred
 
 
-    def get_sds_loss(
-        self, 
-        latents,
-        text_embeddings, 
-        guidance_scale=100, 
-        grad_scale=1,
-    ):
+    def get_sds_loss(self, latents, text_embeddings, guidance_scale=100, grad_scale=1):
         
         # TODO: Implement the loss function for SDS
         # raise NotImplementedError("SDS is not implemented yet.")
@@ -138,13 +132,8 @@ class StableDiffusion(nn.Module):
         mean_func = c0 * pred_x0 + c1 * xt
         return mean_func
 
-    def get_pds_loss(
-        self, src_latents, tgt_latents, 
-        src_text_embedding, tgt_text_embedding,
-        guidance_scale=7.5, 
-        grad_scale=1,
-    ):
-        
+    def get_pds_loss(self, src_latents, tgt_latents, src_text_embedding, tgt_text_embedding,guidance_scale=7.5, grad_scale=1):
+        # For pds, the task is to match the stochastic term of both source and target latents
         # TODO: Implement the loss function for PDS
         # raise NotImplementedError("PDS is not implemented yet.")
         # set up time dependent variables
@@ -190,7 +179,24 @@ class StableDiffusion(nn.Module):
 
         return loss
 
+    def get_dds_loss(self, src_latents, tgt_latents, src_text_embedding, tgt_text_embedding, guidance_scale=7.5, grad_scale=1):
+        # For DDS, the task is to match the noise predict of (src_latents, src_text_embedding) and (tgt_latents, tgt_text_embedding)
 
+        noise = torch.randn_like(src_latents, device=self.device, dtype=self.dtype)
+        t = torch.randint(self.min_step, self.max_step, (src_latents.shape[0],), device=self.device, dtype=torch.long)
+
+        src_latents_noisy = self.scheduler.add_noise(src_latents, noise, t)
+        tgt_latents_noisy = self.scheduler.add_noise(tgt_latents, noise, t)
+
+        src_noise_pred = self.get_noise_preds(src_latents_noisy, t, src_text_embedding, guidance_scale=guidance_scale)
+        tgt_noise_pred = self.get_noise_preds(tgt_latents_noisy, t, tgt_text_embedding, guidance_scale=guidance_scale)
+
+        w_t = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+        grad = w_t * (tgt_noise_pred - src_noise_pred) * grad_scale
+        grad = torch.nan_to_num(grad)
+        target = (tgt_latents - grad).detach()
+        loss = 0.5 * F.mse_loss(tgt_latents, target, reduction="mean")
+        return loss
     
     
     @torch.no_grad()
