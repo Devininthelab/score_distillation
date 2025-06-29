@@ -8,8 +8,6 @@ run_batch.py
 *.ckpt
 *.pt
 *.npy
-*.json
-*.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
