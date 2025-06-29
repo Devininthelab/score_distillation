@@ -200,10 +200,64 @@ def main():
     
     print(f"[*] Running {args.loss_type}")
     run(args)
+
+def auto_run_eval(loss_type="pds"):
+    """
+    Automatically run evaluation on all prompt-image pairs in the JSON file
+    """
+    with open("data/prompt_img_pairs.json", "r") as f:
+        prompt_img_pairs = json.load(f)
     
+    print(f"    Loss type: {loss_type}")
+    save_dir = f"outputs_{loss_type}"
+    if os.path.exists(save_dir):
+        print(f"[*] Save directory {save_dir} already exists. Overwriting...")
+    else:
+        os.makedirs(save_dir)
+
+    for prompt_key, pair in tqdm(prompt_img_pairs.items()):
+        print(f"\n[*] Processing: {prompt_key}")
+        print(f"    Original prompt: {pair['prompt']}")
+        print(f"    Edit prompt: {pair['edit_prompt']}")
+        print(f"    Image path: {pair['img_path']}")
+        
+
+        
+        # Create args object for this run
+        class Args:
+            def __init__(self):
+                self.prompt = pair['prompt']
+                self.edit_prompt = pair['edit_prompt']
+                self.src_img_path = pair['img_path']
+                self.save_dir = save_dir
+                self.loss_type = loss_type 
+                self.guidance_scale = 7.5 if loss_type == "pds" else 25
+                self.step = 500
+                self.device = 0
+                self.lr = 1e-3
+                self.log_step = 25
+                self.precision = "fp32"
+                self.negative_prompt = "low quality"
+        
+        args = Args()
+        
+        # Save config
+        log_opt = vars(args)
+        # config_path = os.path.join(args.save_dir, "run_config.yaml")
+        # with open(config_path, "w") as f:
+        #     json.dump(log_opt, f, indent=4)
+        
+        print(f"[*] Running PDS for {prompt_key}")
+        try:
+            run(args)
+            print(f"[*] Completed: {prompt_key}")
+        except Exception as e:
+            print(f"[ERROR] Failed to process {prompt_key}: {str(e)}")
+            continue
 
 if __name__ == "__main__":
-    main()
+    # For single run
+    # main()
     # For runnning pds: 
     # python main.py --prompt "a cat sitting on a table" --loss_type pds --guidance_scale 7.5 --edit_prompt "a wooden cat statue sitting on a table" --src_img_path data/imgs/a_cat_sitting_on_a_table.png
 
@@ -212,3 +266,6 @@ if __name__ == "__main__":
 
     # For running dds:
     # python main.py --prompt "a cat sitting on a table" --loss_type dds --guidance_scale 25 --edit_prompt "a wooden cat statue sitting on a table" --src_img_path data/imgs/a_cat_sitting_on_a_table.png
+
+    # For batch processing all prompt-image pairs
+    auto_run_eval()
